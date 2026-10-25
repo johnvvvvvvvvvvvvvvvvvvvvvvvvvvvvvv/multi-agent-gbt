@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Agent Workspace</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1c1c1a; --muted: #6b6b66;
+    --border: #e2e2dd; --accent: #4f46e5; --accent-text: #ffffff; --ok: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --card: #1f1f1d; --text: #ececea; --muted: #9a9a94;
+      --border: #333330; --accent: #818cf8; --accent-text: #151514; --ok: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  form { display: flex; gap: 8px; margin-bottom: 24px; }
+  input {
+    flex: 1; padding: 12px 14px; font: inherit; color: var(--text);
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  }
+  button {
+    padding: 12px 20px; font: inherit; font-weight: 600; cursor: pointer;
+    color: var(--accent-text); background: var(--accent); border: 0; border-radius: 10px;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #status { color: var(--muted); margin-bottom: 12px; min-height: 1.5em; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 12px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
+  .task { color: var(--muted); font-size: .9rem; margin: 0 0 8px; }
+  .output { white-space: pre-wrap; word-wrap: break-word; }
+  .badge { font-size: .75rem; font-weight: 600; padding: 2px 8px; border-radius: 99px;
+           border: 1px solid var(--border); color: var(--muted); }
+  .badge.done { color: var(--ok); border-color: var(--ok); }
+  .final { border-color: var(--accent); }
+  .error { color: #dc2626; }
+  .label { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em;
+           color: var(--muted); margin: 20px 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Multi-Agent Workspace</h1>
+  <p class="sub">An orchestrator plans, specialist agents work in parallel, a synthesizer merges the results.</p>
+
+  <form id="form">
+    <input id="goal" placeholder="Describe a goal, e.g. Plan a launch for a new productivity app" required>
+    <input id="key" type="password" placeholder="Access key" style="flex:0 0 130px">
+    <button id="go" type="submit">Run</button>
+  </form>
+
+  <div id="status"></div>
+  <div id="plan"></div>
+  <div id="final"></div>
+</main>
+
+<script>
+  const form = document.getElementById("form");
+  const goalInput = document.getElementById("goal");
+  const keyInput = document.getElementById("key");
+  const goBtn = document.getElementById("go");
+  const statusEl = document.getElementById("status");
+  const planEl = document.getElementById("plan");
+  const finalEl = document.getElementById("final");
+  let source = null;
+
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text; // textContent keeps model output safe
+    return node;
+  }
+
+  function finish() {
+    if (source) source.close();
+    source = null;
+    goBtn.disabled = false;
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (source) source.close();
+    planEl.replaceChildren();
+    finalEl.replaceChildren();
+    statusEl.className = "";
+    statusEl.textContent = "Starting...";
+    goBtn.disabled = true;
+
+    const cards = [];
+    source = new EventSource("/run?goal=" + encodeURIComponent(goalInput.value) +
+      "&key=" + encodeURIComponent(keyInput.value));
+
+    source.addEventListener("status", (ev) => {
+      statusEl.textContent = JSON.parse(ev.data).message;
+    });
+
+    source.addEventListener("plan", (ev) => {
+      const { steps } = JSON.parse(ev.data);
+      planEl.appendChild(el("div", "label", "Agents"));
+      steps.forEach((step) => {
+        const card = el("div", "card");
+        const h = el("h3", null, step.role);
+        const badge = el("span", "badge", "working...");
+        h.appendChild(badge);
+        card.append(h, el("p", "task", step.task));
+        const out = el("div", "output");
+        card.appendChild(out);
+        planEl.appendChild(card);
+        cards.push({ badge, out });
+      });
+      statusEl.textContent = "Agents working in parallel...";
+    });
+
+    source.addEventListener("worker_done", (ev) => {
+      const { index, output } = JSON.parse(ev.data);
+      cards[index].badge.textContent = "done";
+      cards[index].badge.classList.add("done");
+      cards[index].out.textContent = output;
+    });
+
+    source.addEventListener("final", (ev) => {
+      const { output } = JSON.parse(ev.data);
+      finalEl.appendChild(el("div", "label", "Final answer"));
+      const card = el("div", "card final");
+      card.appendChild(el("div", "output", output));
+      finalEl.appendChild(card);
+      statusEl.textContent = "Done.";
+      finish();
+    });
+
+    source.addEventListener("error", (ev) => {
+      // Server-sent "error" events carry data; connection errors do not.
+      if (ev.data) {
+        statusEl.className = "error";
+        statusEl.textContent = "Error: " + JSON.parse(ev.data).message;
+      } else if (source) {
+        statusEl.className = "error";
+        statusEl.textContent = "Connection failed. Check the access key, or retry in a minute if the server was asleep.";
+      }
+      finish();
+    });
+  });
+</script>
+</body>
+</html>

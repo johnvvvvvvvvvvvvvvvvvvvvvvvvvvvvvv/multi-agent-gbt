@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: multi-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: OPENAI_API_KEY
+        sync: false   # you enter this in the Render dashboard
+      - key: OPENAI_MODEL
+        value: gpt-5-mini   # change here or in the dashboard
+      - key: ACCESS_KEY
+        sync: false   # a password you choose; the page asks for it
